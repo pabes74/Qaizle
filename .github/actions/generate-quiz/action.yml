@@ -1,0 +1,48 @@
+name: Generate Qaizle Quiz
+description: Generates a PR reviewer quiz and creates its pending check run.
+
+inputs:
+  github-token:
+    description: Token with the required pull-request, issue, model, and check permissions.
+    required: true
+  repository:
+    description: Repository in owner/name format.
+    required: true
+  pr-number:
+    description: Pull request number.
+    required: true
+  model:
+    description: GitHub Models/Copilot model identifier.
+    required: false
+    default: openai/gpt-4.1-mini
+  max-files:
+    description: Maximum changed files to include in analysis.
+    required: false
+    default: "30"
+  pass-threshold:
+    description: Minimum number of correct answers required to pass.
+    required: false
+    default: "3"
+  run-url:
+    description: URL for the workflow run that generated the quiz.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Generate reviewer quiz
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        TARGET_REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        QUIZ_MODEL: ${{ inputs.model }}
+        MAX_FILES: ${{ inputs.max-files }}
+        MIN_CORRECT: ${{ inputs.pass-threshold }}
+        RUN_URL: ${{ inputs.run-url }}
+      run: node "$GITHUB_ACTION_PATH/../../scripts/pr-quiz.mjs"
