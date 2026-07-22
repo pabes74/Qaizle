@@ -45,6 +45,8 @@ To make this a hard gate, go to your repository's **Settings → Branches → Br
 | `.github/workflows/copilot-pr-quiz.yml` | Workflow: generates quiz on PR open/update and evaluates `/quiz-answers` comments |
 | `.github/scripts/pr-quiz.mjs` | Script: calls GitHub Models to generate quiz, posts comment, creates check run |
 | `.github/scripts/pr-quiz-evaluate.mjs` | Script: parses answer submission, posts result comment, updates check run |
+| `.github/actions/generate-quiz/action.yml` | Composite action used by the reusable workflow to generate the quiz |
+| `.github/actions/evaluate-quiz/action.yml` | Composite action for evaluating answer comments from another repository |
 
 The workflow runs automatically on `pull_request` events and answer evaluation runs on `issue_comment` events.  It can also be called as a reusable workflow (`workflow_call`).
 
@@ -69,7 +71,7 @@ Then commit all three files in the target repository.  Both quiz generation and 
 
 ### Reusable workflow usage
 
-GitHub does not forward `issue_comment` events into a reusable workflow. To use Qaizle from another repository, add both jobs below to the caller repository. The first job generates the quiz through the reusable workflow; the second receives answer comments and invokes Qaizle's evaluation action.
+GitHub does not forward `issue_comment` events into a reusable workflow. To use Qaizle from another repository, add both jobs below to the caller repository. The first job generates the quiz through the reusable workflow, which runs Qaizle's packaged generation action rather than looking for scripts in the caller repository. The second receives answer comments and invokes Qaizle's evaluation action.
 
 > The `permissions` block is required. Without it, GitHub can run the workflow but cannot post the multiple-choice quiz, result, or check run.
 

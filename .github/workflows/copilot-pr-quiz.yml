@@ -46,24 +46,22 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Generate reviewer quiz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_REPOSITORY: ${{ inputs.repository != '' && inputs.repository || github.repository }}
-          PR_NUMBER: ${{ inputs['pr-number'] != '' && inputs['pr-number'] || github.event.pull_request.number }}
-          QUIZ_MODEL: ${{ inputs.model != '' && inputs.model || 'openai/gpt-4.1-mini' }}
-          MAX_FILES: ${{ inputs['max-files'] != '' && inputs['max-files'] || 30 }}
-          MIN_CORRECT: ${{ inputs['pass-threshold'] != '' && inputs['pass-threshold'] || 3 }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node .github/scripts/pr-quiz.mjs
+        uses: pabes74/Qaizle/.github/actions/generate-quiz@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: >-
+            ${{ inputs.repository != '' && inputs.repository || github.repository }}
+          pr-number: >-
+            ${{ inputs['pr-number'] != '' && inputs['pr-number'] || github.event.pull_request.number }}
+          model: >-
+            ${{ inputs.model != '' && inputs.model || 'openai/gpt-4.1-mini' }}
+          max-files: >-
+            ${{ inputs['max-files'] != '' && inputs['max-files'] || 30 }}
+          pass-threshold: >-
+            ${{ inputs['pass-threshold'] != '' && inputs['pass-threshold'] || 3 }}
+          run-url: >-
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   evaluate-quiz-answer:
     # Triggered when anyone posts a comment containing /quiz-answers on a PR
