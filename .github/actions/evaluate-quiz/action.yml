@@ -1,0 +1,37 @@
+name: Evaluate Qaizle Answers
+description: Evaluates a /quiz-answers PR comment and updates the Qaizle check run.
+
+inputs:
+  github-token:
+    description: Token with issues, pull-requests, and checks write permissions.
+    required: true
+  repository:
+    description: Repository in owner/name format.
+    required: true
+  pr-number:
+    description: Pull request number.
+    required: true
+  comment-body:
+    description: Raw body of the submitted comment.
+    required: true
+  commenter-login:
+    description: GitHub login of the commenter.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Evaluate quiz answers
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        TARGET_REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMENT_BODY: ${{ inputs.comment-body }}
+        COMMENTER_LOGIN: ${{ inputs.commenter-login }}
+      run: node "$GITHUB_ACTION_PATH/../../scripts/pr-quiz-evaluate.mjs"

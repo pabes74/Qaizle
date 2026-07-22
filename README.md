@@ -67,9 +67,11 @@ To reuse in another repository, copy all three files:
 
 Then commit all three files in the target repository.  Both quiz generation and answer evaluation will work automatically.
 
-### Reusable workflow usage example
+### Reusable workflow usage
 
-> **Note:** When using the workflow via `workflow_call`, answer evaluation (the `issue_comment` trigger) does **not** fire through the reusable mechanism.  For full functionality including PR blocking, copy the files directly into the target repository.
+GitHub does not forward `issue_comment` events into a reusable workflow. To use Qaizle from another repository, add both jobs below to the caller repository. The first job generates the quiz through the reusable workflow; the second receives answer comments and invokes Qaizle's evaluation action.
+
+> The `permissions` block is required. Without it, GitHub can run the workflow but cannot post the multiple-choice quiz, result, or check run.
 
 ```yaml
 name: PR Quiz
@@ -77,13 +79,39 @@ name: PR Quiz
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
 
 jobs:
   qaizle-quiz:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     uses: <owner>/<repo>/.github/workflows/copilot-pr-quiz.yml@main
     with:
       pr-number: ${{ github.event.pull_request.number }}
       repository: ${{ github.repository }}
       model: openai/gpt-4.1-mini
       pass-threshold: 3
+
+  qaizle-evaluate:
+    if: >
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/quiz-answers')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: <owner>/<repo>/.github/actions/evaluate-quiz@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          pr-number: ${{ github.event.issue.number }}
+          comment-body: ${{ github.event.comment.body }}
+          commenter-login: ${{ github.event.comment.user.login }}
 ```
+
+Replace `<owner>/<repo>` with this repository (for example, `pabes74/Qaizle`) and keep `@main` so the latest Qaizle workflow is used. The quiz is text-based because GitHub PR comments do not provide interactive multiple-choice controls. Submit answers with `/quiz-answers A B C D A`; Qaizle then posts the green ✅ / red ❌ result and updates the required check.
