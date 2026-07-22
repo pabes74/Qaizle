@@ -1,0 +1,55 @@
+name: Copilot PR Quiz
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
+    inputs:
+      pr-number:
+        description: Pull request number to analyze
+        required: true
+        type: string
+      repository:
+        description: Repository in owner/name format
+        required: false
+        type: string
+        default: ""
+      model:
+        description: GitHub Models/Copilot model identifier
+        required: false
+        type: string
+        default: openai/gpt-4.1-mini
+      max-files:
+        description: Maximum changed files to include in analysis
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  models: read
+
+jobs:
+  generate-review-quiz:
+    if: github.event_name == 'workflow_call' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate reviewer quiz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPOSITORY: ${{ inputs.repository != '' && inputs.repository || github.repository }}
+          PR_NUMBER: ${{ inputs['pr-number'] != '' && inputs['pr-number'] || github.event.pull_request.number }}
+          QUIZ_MODEL: ${{ inputs.model != '' && inputs.model || 'openai/gpt-4.1-mini' }}
+          MAX_FILES: ${{ inputs['max-files'] != '' && inputs['max-files'] || 30 }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/pr-quiz.mjs
