@@ -3,6 +3,8 @@ name: Copilot PR Quiz
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
   workflow_call:
     inputs:
       pr-number:
@@ -24,16 +26,24 @@ on:
         required: false
         type: number
         default: 30
+      pass-threshold:
+        description: Minimum number of correct answers required to pass (0 = no gate, max 5)
+        required: false
+        type: number
+        default: 3
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
   models: read
+  checks: write
 
 jobs:
   generate-review-quiz:
-    if: github.event_name == 'workflow_call' || github.event.pull_request.draft == false
+    if: >
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -51,5 +61,31 @@ jobs:
           PR_NUMBER: ${{ inputs['pr-number'] != '' && inputs['pr-number'] || github.event.pull_request.number }}
           QUIZ_MODEL: ${{ inputs.model != '' && inputs.model || 'openai/gpt-4.1-mini' }}
           MAX_FILES: ${{ inputs['max-files'] != '' && inputs['max-files'] || 30 }}
+          MIN_CORRECT: ${{ inputs['pass-threshold'] != '' && inputs['pass-threshold'] || 3 }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/pr-quiz.mjs
+
+  evaluate-quiz-answer:
+    # Triggered when anyone posts a comment containing /quiz-answers on a PR
+    if: >
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/quiz-answers')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Evaluate quiz answer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER_LOGIN: ${{ github.event.comment.user.login }}
+        run: node .github/scripts/pr-quiz-evaluate.mjs

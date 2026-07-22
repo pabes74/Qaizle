@@ -4,6 +4,8 @@ const prNumber = Number.parseInt(process.env.PR_NUMBER || '', 10);
 const model = process.env.QUIZ_MODEL || 'openai/gpt-4.1-mini';
 const maxFiles = Number.parseInt(process.env.MAX_FILES || '30', 10);
 const runUrl = process.env.RUN_URL || '';
+const minCorrect = Math.max(0, Math.min(5, Number.parseInt(process.env.MIN_CORRECT || '3', 10)));
+const checkRunName = 'Copilot PR Quiz';
 
 if (!token) throw new Error('Missing GITHUB_TOKEN');
 if (!targetRepository || !targetRepository.includes('/')) throw new Error('TARGET_REPOSITORY must be owner/name');
@@ -143,35 +145,84 @@ function fallbackQuestions(files) {
 }
 
 function renderComment(questions) {
+  const quizDataJson = JSON.stringify({
+    correctAnswers: questions.map((q) => q.answerIndex),
+    minCorrect
+  });
+  // Encode as base64 so special characters cannot accidentally break the HTML comment
+  const quizDataEncoded = Buffer.from(quizDataJson).toString('base64');
+
   const lines = [
     marker,
+    `<!-- quiz-data-b64:${quizDataEncoded} -->`,
     '## 🧠 Copilot Reviewer Quiz',
     '',
     '> 5 multiple-choice questions generated from the pull request diff to validate reviewer understanding.',
     ''
   ];
 
+  if (minCorrect > 0) {
+    lines.push(`> ⚠️ A minimum score of **${minCorrect} out of 5** correct answers is required to pass the quiz check.`);
+    lines.push('');
+  }
+
   questions.forEach((q, index) => {
     lines.push(`### ${index + 1}. ${q.question}`);
+    lines.push('');
     q.options.forEach((option, optionIndex) => {
       const letter = String.fromCharCode(65 + optionIndex);
-      lines.push(`- [ ] **${letter}.** ${option}`);
+      lines.push(`- **${letter}.** ${option}`);
     });
     lines.push('');
     lines.push('<details>');
-    lines.push('<summary>Suggested answer & rationale</summary>');
+    lines.push('<summary>💡 Reveal answer &amp; rationale</summary>');
     lines.push('');
-    lines.push(`**Answer:** ${String.fromCharCode(65 + q.answerIndex)}`);
+    lines.push(`**Correct answer: ${String.fromCharCode(65 + q.answerIndex)}** ✅`);
     lines.push('');
-    lines.push(`**Why:** ${q.rationale}`);
+    lines.push(`**Rationale:** ${q.rationale}`);
     lines.push('</details>');
     lines.push('');
   });
 
   lines.push('---');
+  lines.push('');
+  lines.push('### 📝 Submit your answers');
+  lines.push('');
+  lines.push('Reply to this comment with one letter (A–D) per question in order:');
+  lines.push('');
+  lines.push('```');
+  lines.push('/quiz-answers A B C D A');
+  lines.push('```');
+  lines.push('');
+  lines.push('> After submitting, a result comment will be posted showing ✅ / ❌ for each answer,');
+  lines.push('> and the PR check will be updated accordingly.');
+  lines.push('');
+  lines.push('---');
   lines.push(`_Generated automatically by the Copilot PR Quiz workflow${runUrl ? ` ([run logs](${runUrl}))` : ''}._`);
 
   return lines.join('\n');
+}
+
+async function createPendingCheckRun(headSha) {
+  if (!headSha) return;
+  try {
+    await ghRequest(`/repos/${owner}/${repo}/check-runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: checkRunName,
+        head_sha: headSha,
+        status: 'in_progress',
+        output: {
+          title: 'Waiting for quiz answers',
+          summary: `The reviewer quiz has been posted. Reply to the quiz comment with \`/quiz-answers A B C D A\` to submit answers.${minCorrect > 0 ? ` Minimum passing score: ${minCorrect}/5.` : ''}`
+        }
+      })
+    });
+    console.log(`Created pending check run "${checkRunName}" for SHA ${headSha}.`);
+  } catch (error) {
+    console.warn(`Could not create check run (non-fatal): ${error.message}`);
+  }
 }
 
 async function upsertComment(body) {
@@ -282,6 +333,7 @@ async function generateQuestions(prompt) {
 
   const comment = renderComment(questions);
   await upsertComment(comment);
+  await createPendingCheckRun(pr.head?.sha);
 
   console.log(`Posted Copilot reviewer quiz for PR #${pr.number} in ${owner}/${repo}.`);
 })();
