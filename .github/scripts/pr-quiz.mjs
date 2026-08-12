@@ -16,6 +16,22 @@ const githubApiBase = 'https://api.github.com';
 const modelsEndpoint = process.env.MODELS_ENDPOINT || 'https://models.github.ai/inference/chat/completions';
 const marker = '<!-- copilot-pr-quiz -->';
 
+// Base prompt: keep quiz questions focused on the PR's overall goal(s), not per-file implementation details.
+const QUIZ_SYSTEM_PROMPT =
+  'You are a strict PR-review quiz generator. Your job is to test whether a reviewer understands the OVERALL GOAL(S) of a pull request — not implementation minutiae in any single file. Return only valid JSON with exactly 5 questions and at least 4 answer options each.';
+
+const QUESTION_GUIDELINES = [
+  'Create exactly 5 multiple-choice questions that test the reviewer\'s understanding of this PR at a high level.',
+  'Requirements:',
+  '- Question 1 must always ask about the overall goal/purpose of this PR as a whole (e.g. "What is this PR about?" / "What problem does this PR solve?").',
+  '- If the changes serve multiple distinct goals or unrelated concerns, include one question asking the reviewer to identify that the PR bundles multiple goals, and what those goals are. If the PR has a single cohesive goal, use this slot for another high-level question about its overall scope or impact instead.',
+  '- All other questions must stay at the level of overall intent, scope, and impact of the PR as a whole (e.g. what behavior changes, who/what is affected, why the change matters) — never about a single file, function, or line.',
+  '- Do NOT create questions about implementation details specific to one file (e.g. "why was variable X renamed in file Y", "what does this specific function do", "what changed in this patch snippet").',
+  '- Base your understanding of the goal(s) on the PR title, description, and the overall pattern of changes across files — not on any single file in isolation.',
+  'Return strict JSON in this schema:',
+  '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":0,"rationale":"..."}]}'
+].join('\n');
+
 const ghHeaders = {
   Accept: 'application/vnd.github+json',
   Authorization: `token ${token}`,
@@ -81,13 +97,10 @@ function normalizeQuestions(payload) {
     });
 }
 
-function fallbackQuestions(files) {
-  const changedNames = files.slice(0, 5).map((f) => `\`${f.filename}\``);
-  const focus = changedNames.length ? changedNames.join(', ') : 'the modified files';
-
+function fallbackQuestions() {
   return [
     {
-      question: `What is the most likely business or product goal behind changes in ${focus}?`,
+      question: 'What is the most likely overall business or product goal of this PR?',
       options: [
         'To introduce a new user-facing behavior',
         'To refactor internals without behavior changes',
@@ -269,11 +282,7 @@ async function loadPullRequestContext() {
       'Changed files and patch excerpts:',
       fileSummaries,
       '',
-      'Create exactly 5 multiple-choice questions to verify reviewer understanding.',
-      'Each question must have at least 4 plausible options.',
-      'Focus on purpose, functionality, side effects, and requirement alignment.',
-      'Return strict JSON in this schema:',
-      '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":0,"rationale":"..."}]}'
+      QUESTION_GUIDELINES
     ].join('\n')
   };
 }
@@ -291,8 +300,7 @@ async function generateQuestions(prompt) {
       messages: [
         {
           role: 'system',
-          content:
-            'You are a strict code-review quiz generator. Return only valid JSON with exactly 5 questions and at least 4 answer options each.'
+          content: QUIZ_SYSTEM_PROMPT
         },
         {
           role: 'user',
@@ -321,14 +329,14 @@ async function generateQuestions(prompt) {
 }
 
 (async () => {
-  const { pr, files, prompt } = await loadPullRequestContext();
+  const { pr, prompt } = await loadPullRequestContext();
 
   let questions;
   try {
     questions = await generateQuestions(prompt);
   } catch (error) {
     console.warn(`Falling back to template questions: ${error.message}`);
-    questions = fallbackQuestions(files);
+    questions = fallbackQuestions();
   }
 
   const comment = renderComment(questions);
