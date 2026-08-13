@@ -28,8 +28,10 @@ const QUESTION_GUIDELINES = [
   '- All other questions must stay at the level of overall intent, scope, and impact of the PR as a whole (e.g. what behavior changes, who/what is affected, why the change matters) — never about a single file, function, or line.',
   '- Do NOT create questions about implementation details specific to one file (e.g. "why was variable X renamed in file Y", "what does this specific function do", "what changed in this patch snippet").',
   '- Base your understanding of the goal(s) on the PR title, description, and the overall pattern of changes across files — not on any single file in isolation.',
+  '- The correct answer and all distractors must be specific to this PR\'s actual content — reference the real feature, behavior, file, or component by name where relevant. Do not use generic statements that could apply to any PR (e.g. avoid phrasing like "introduces a new user-facing behavior" with no specifics).',
+  '- Vary which option is correct across the 5 questions — do not make the correct answer the first option every time.',
   'Return strict JSON in this schema:',
-  '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":0,"rationale":"..."}]}'
+  '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOption":<0-based index of the correct option, varied across questions>,"rationale":"..."}]}'
 ].join('\n');
 
 const ghHeaders = {
@@ -63,7 +65,31 @@ function sanitize(text, fallback = 'N/A') {
 
 function parseJsonPayload(raw) {
   const clean = sanitize(raw, '{}').replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (error) {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start === -1 || end === -1 || end < start) throw error;
+    return JSON.parse(clean.slice(start, end + 1));
+  }
+}
+
+// Fisher-Yates shuffle of a question's options, keeping answerIndex pointed at the correct option's text.
+function shuffleOptions(question) {
+  const correctOption = question.options[question.answerIndex];
+  const options = [...question.options];
+
+  for (let i = options.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+
+  return {
+    ...question,
+    options,
+    answerIndex: options.indexOf(correctOption)
+  };
 }
 
 function normalizeQuestions(payload) {
@@ -287,7 +313,27 @@ async function loadPullRequestContext() {
   };
 }
 
-async function generateQuestions(prompt) {
+async function requestQuestionsOnce(prompt) {
+  const body = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: QUIZ_SYSTEM_PROMPT
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ],
+    temperature: 0.2
+  };
+
+  // GitHub Models proxies OpenAI-compatible models; only these reliably support response_format.
+  if (model.startsWith('openai/')) {
+    body.response_format = { type: 'json_object' };
+  }
+
   const response = await fetch(modelsEndpoint, {
     method: 'POST',
     headers: {
@@ -295,20 +341,7 @@ async function generateQuestions(prompt) {
       'api-key': token,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: QUIZ_SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.2
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -328,6 +361,16 @@ async function generateQuestions(prompt) {
   return questions;
 }
 
+async function generateQuestions(prompt) {
+  try {
+    return await requestQuestionsOnce(prompt);
+  } catch (error) {
+    console.warn(`Quiz generation attempt failed, retrying once: ${error.message}`);
+    const retryPrompt = `${prompt}\n\nReturn ONLY the JSON object, no prose or markdown fences, with exactly 5 questions.`;
+    return requestQuestionsOnce(retryPrompt);
+  }
+}
+
 (async () => {
   const { pr, prompt } = await loadPullRequestContext();
 
@@ -338,6 +381,8 @@ async function generateQuestions(prompt) {
     console.warn(`Falling back to template questions: ${error.message}`);
     questions = fallbackQuestions();
   }
+
+  questions = questions.map(shuffleOptions);
 
   const comment = renderComment(questions);
   await upsertComment(comment);
