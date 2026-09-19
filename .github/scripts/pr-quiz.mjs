@@ -183,7 +183,7 @@ function fallbackQuestions() {
   ];
 }
 
-function renderComment(questions) {
+function renderComment(questions, usedFallback = false) {
   const quizDataJson = JSON.stringify({
     correctAnswers: questions.map((q) => q.answerIndex),
     minCorrect
@@ -199,6 +199,13 @@ function renderComment(questions) {
     '> 5 multiple-choice questions generated from the pull request diff to validate reviewer understanding.',
     ''
   ];
+
+  if (usedFallback) {
+    lines.push(
+      '> ⚠️ **AI-generated quiz unavailable — showing generic fallback questions.** Check the workflow run logs and confirm the `models: read` permission is granted to this workflow.'
+    );
+    lines.push('');
+  }
 
   if (minCorrect > 0) {
     lines.push(`> ⚠️ A minimum score of **${minCorrect} out of 5** correct answers is required to pass the quiz check.`);
@@ -375,16 +382,18 @@ async function generateQuestions(prompt) {
   const { pr, prompt } = await loadPullRequestContext();
 
   let questions;
+  let usedFallback = false;
   try {
     questions = await generateQuestions(prompt);
   } catch (error) {
     console.warn(`Falling back to template questions: ${error.message}`);
     questions = fallbackQuestions();
+    usedFallback = true;
   }
 
   questions = questions.map(shuffleOptions);
 
-  const comment = renderComment(questions);
+  const comment = renderComment(questions, usedFallback);
   await upsertComment(comment);
   await createPendingCheckRun(pr.head?.sha);
 

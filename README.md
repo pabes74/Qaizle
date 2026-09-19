@@ -73,7 +73,7 @@ Then commit all three files in the target repository.  Both quiz generation and 
 
 GitHub does not forward `issue_comment` events into a reusable workflow. To use Qaizle from another repository, add both jobs below to the caller repository. The first job generates the quiz through the reusable workflow, which runs Qaizle's packaged generation action rather than looking for scripts in the caller repository. The second receives answer comments and invokes Qaizle's evaluation action.
 
-> The `permissions` block is required. Without it, GitHub can run the workflow but cannot post the multiple-choice quiz, result, or check run.
+> The `permissions` block is required. Without it, GitHub can run the workflow but cannot post the multiple-choice quiz, result, or check run. In particular, `models: read` is what lets Qaizle call GitHub Models to generate real, PR-specific questions using the workflow's own `GITHUB_TOKEN` — no separate API key or endpoint needed. If it's missing, quiz generation fails silently and Qaizle falls back to generic template questions.
 
 ```yaml
 name: PR Quiz
@@ -88,6 +88,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  models: read
   checks: write
 
 jobs:
