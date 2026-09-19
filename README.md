@@ -1,12 +1,12 @@
 # Qaizle
 
-Portable GitHub Actions PR check that generates a **Copilot-powered reviewer quiz**.
+Portable GitHub Actions PR check that generates an **AI-powered reviewer quiz**, using either GitHub Copilot/GitHub Models or the Claude API.
 
 ## What it does
 
 For each pull request, the workflow:
 - reads the PR diff,
-- asks GitHub Copilot/GitHub Models to generate **5 reviewer questions**,
+- asks GitHub Copilot/GitHub Models (default) or Claude to generate **5 reviewer questions**,
 - ensures each question is **multiple choice with at least 4 labeled options (A, B, C, D)**,
 - posts (or updates) a styled PR comment with the questions and collapsible answers,
 - creates a **GitHub Check Run** ("Copilot PR Quiz") that stays _in progress_ until the reviewer submits answers.
@@ -30,20 +30,20 @@ To make this a hard gate, go to your repository's **Settings → Branches → Br
 
 ## Prerequisites
 
-- A GitHub plan/account with access to **Copilot / GitHub Models**.
-- Workflow permissions for:
+- For the default `copilot` provider: a GitHub plan/account with access to **Copilot / GitHub Models**, and workflow permissions for:
   - `pull-requests: write`
   - `issues: write`
   - `contents: read`
   - `models: read`
   - `checks: write`
+- For the `claude` provider: the same permissions minus `models: read`, plus an **Anthropic API key** supplied as a secret (see [Choosing a provider](#choosing-a-provider)).
 
 ## Included files
 
 | File | Purpose |
 |------|---------|
 | `.github/workflows/copilot-pr-quiz.yml` | Workflow: generates quiz on PR open/update and evaluates `/quiz-answers` comments |
-| `.github/scripts/pr-quiz.mjs` | Script: calls GitHub Models to generate quiz, posts comment, creates check run |
+| `.github/scripts/pr-quiz.mjs` | Script: calls GitHub Models or Claude (based on `provider`) to generate quiz, posts comment, creates check run |
 | `.github/scripts/pr-quiz-evaluate.mjs` | Script: parses answer submission, posts result comment, updates check run |
 | `.github/actions/generate-quiz/action.yml` | Composite action used by the reusable workflow to generate the quiz |
 | `.github/actions/evaluate-quiz/action.yml` | Composite action for evaluating answer comments from another repository |
@@ -56,9 +56,18 @@ The workflow runs automatically on `pull_request` events and answer evaluation r
 |-------|---------|-------------|
 | `pr-number` | _(required for workflow_call)_ | Pull request number to analyze |
 | `repository` | current repo | Repository in `owner/name` format |
-| `model` | `openai/gpt-4.1-mini` | GitHub Models / Copilot model identifier |
+| `model` | `openai/gpt-4.1-mini` | GitHub Models / Copilot model identifier (used when `provider` is `copilot`) |
 | `max-files` | `30` | Maximum changed files to include in analysis |
 | `pass-threshold` | `3` | Minimum correct answers to pass (0 = no gate) |
+| `provider` | `copilot` | Quiz generation provider: `copilot` (GitHub Models) or `claude` (Anthropic API) |
+| `claude-model` | `claude-haiku-4-5` | Claude model identifier (used when `provider` is `claude`) |
+
+Selecting `claude` also requires the `anthropic-api-key` **secret** (not an input — see below).
+
+## Choosing a provider
+
+- **`copilot` (default)** — uses GitHub Models with the workflow's own `GITHUB_TOKEN`; no extra secret needed, but the workflow must grant `models: read` (see [Prerequisites](#prerequisites)). If quiz generation fails (e.g. missing permission), Qaizle degrades gracefully: it posts a generic fallback quiz with a ⚠️ warning banner rather than failing the check.
+- **`claude`** — calls the Claude API directly. Requires an Anthropic API key, supplied as a repository/organization secret and forwarded into the reusable workflow as `secrets.anthropic-api-key` (see the example below). Unlike the Copilot path, a misconfigured or failing Claude call **fails the check run and the Action step outright** — no quiz comment is posted — since an explicit choice of `claude` shouldn't silently degrade into a generic-looking quiz.
 
 ## Portability
 
@@ -100,6 +109,12 @@ jobs:
       repository: ${{ github.repository }}
       model: openai/gpt-4.1-mini
       pass-threshold: 3
+      # Optional: switch to Claude instead of Copilot/GitHub Models.
+      # provider: claude
+      # claude-model: claude-haiku-4-5
+    # secrets:
+    #   # Only needed when provider: claude — a repo/org secret holding your Anthropic API key.
+    #   anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
   qaizle-evaluate:
     if: >

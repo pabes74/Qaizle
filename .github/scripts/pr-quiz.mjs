@@ -7,6 +7,15 @@ const runUrl = process.env.RUN_URL || '';
 const minCorrect = Math.max(0, Math.min(5, Number.parseInt(process.env.MIN_CORRECT || '3', 10)));
 const checkRunName = 'Copilot PR Quiz';
 
+const requestedProvider = (process.env.QUIZ_PROVIDER || 'copilot').trim().toLowerCase();
+if (requestedProvider !== 'copilot' && requestedProvider !== 'claude') {
+  console.warn(`Unknown QUIZ_PROVIDER "${requestedProvider}", falling back to "copilot".`);
+}
+const provider = requestedProvider === 'claude' ? 'claude' : 'copilot';
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+const claudeModel = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
+const anthropicEndpoint = process.env.ANTHROPIC_ENDPOINT || 'https://api.anthropic.com/v1/messages';
+
 if (!token) throw new Error('Missing GITHUB_TOKEN');
 if (!targetRepository || !targetRepository.includes('/')) throw new Error('TARGET_REPOSITORY must be owner/name');
 if (!Number.isFinite(prNumber)) throw new Error('PR_NUMBER must be a valid pull request number');
@@ -271,6 +280,29 @@ async function createPendingCheckRun(headSha) {
   }
 }
 
+async function createFailedCheckRun(headSha, message) {
+  if (!headSha) return;
+  try {
+    await ghRequest(`/repos/${owner}/${repo}/check-runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: checkRunName,
+        head_sha: headSha,
+        status: 'completed',
+        conclusion: 'failure',
+        output: {
+          title: 'Quiz generation failed',
+          summary: `Could not generate the reviewer quiz using provider "${provider}".\n\n\`\`\`\n${sanitize(message, 'Unknown error').slice(0, 1000)}\n\`\`\``
+        }
+      })
+    });
+    console.log(`Created failed check run "${checkRunName}" for SHA ${headSha}.`);
+  } catch (error) {
+    console.warn(`Could not create failed check run (non-fatal): ${error.message}`);
+  }
+}
+
 async function upsertComment(body) {
   const comments = await ghRequest(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
   const existing = comments.find((comment) => typeof comment.body === 'string' && comment.body.includes(marker));
@@ -320,7 +352,7 @@ async function loadPullRequestContext() {
   };
 }
 
-async function requestQuestionsOnce(prompt) {
+async function requestQuestionsFromCopilot(prompt) {
   const body = {
     model,
     messages: [
@@ -368,6 +400,79 @@ async function requestQuestionsOnce(prompt) {
   return questions;
 }
 
+// Response schema enforced via Claude's structured outputs (output_config.format), so the
+// response text is guaranteed schema-conformant JSON rather than needing fence-stripping.
+const CLAUDE_QUESTIONS_SCHEMA = {
+  type: 'object',
+  properties: {
+    questions: {
+      type: 'array',
+      minItems: 5,
+      maxItems: 5,
+      items: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          options: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 4,
+            items: { type: 'string' }
+          },
+          correctOption: { type: 'integer', minimum: 0, maximum: 3 },
+          rationale: { type: 'string' }
+        },
+        required: ['question', 'options', 'correctOption', 'rationale'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['questions'],
+  additionalProperties: false
+};
+
+async function requestQuestionsFromClaude(prompt) {
+  if (!anthropicApiKey) {
+    throw new Error('Missing ANTHROPIC_API_KEY (required when quiz-provider is "claude")');
+  }
+
+  const response = await fetch(anthropicEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': anthropicApiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: claudeModel,
+      max_tokens: 4096,
+      system: QUIZ_SYSTEM_PROMPT,
+      output_config: { format: { type: 'json_schema', schema: CLAUDE_QUESTIONS_SCHEMA } },
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Claude API request failed (${response.status}): ${text}`);
+  }
+
+  const data = await response.json();
+  const textBlock = Array.isArray(data?.content) ? data.content.find((block) => block?.type === 'text') : null;
+  const parsed = parseJsonPayload(textBlock?.text);
+  const questions = normalizeQuestions(parsed);
+
+  if (questions.length !== 5) {
+    throw new Error(`Expected 5 questions, received ${questions.length}`);
+  }
+
+  return questions;
+}
+
+function requestQuestionsOnce(prompt) {
+  return provider === 'claude' ? requestQuestionsFromClaude(prompt) : requestQuestionsFromCopilot(prompt);
+}
+
 async function generateQuestions(prompt) {
   try {
     return await requestQuestionsOnce(prompt);
@@ -386,6 +491,11 @@ async function generateQuestions(prompt) {
   try {
     questions = await generateQuestions(prompt);
   } catch (error) {
+    if (provider === 'claude') {
+      console.error(`Claude quiz generation failed: ${error.message}`);
+      await createFailedCheckRun(pr.head?.sha, error.message);
+      process.exit(1);
+    }
     console.warn(`Falling back to template questions: ${error.message}`);
     questions = fallbackQuestions();
     usedFallback = true;
@@ -397,5 +507,5 @@ async function generateQuestions(prompt) {
   await upsertComment(comment);
   await createPendingCheckRun(pr.head?.sha);
 
-  console.log(`Posted Copilot reviewer quiz for PR #${pr.number} in ${owner}/${repo}.`);
+  console.log(`Posted reviewer quiz (provider: ${provider}) for PR #${pr.number} in ${owner}/${repo}.`);
 })();

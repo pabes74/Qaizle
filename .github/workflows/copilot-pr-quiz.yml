@@ -31,6 +31,20 @@ on:
         required: false
         type: number
         default: 3
+      provider:
+        description: Quiz generation provider, "copilot" (GitHub Models) or "claude" (Anthropic API)
+        required: false
+        type: string
+        default: copilot
+      claude-model:
+        description: Claude model identifier, used when provider is "claude"
+        required: false
+        type: string
+        default: claude-haiku-4-5
+    secrets:
+      anthropic-api-key:
+        description: Anthropic API key. Required when provider is "claude".
+        required: false
 
 permissions:
   contents: read
@@ -62,6 +76,11 @@ jobs:
             ${{ inputs['pass-threshold'] != '' && inputs['pass-threshold'] || 3 }}
           run-url: >-
             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          provider: >-
+            ${{ inputs.provider != '' && inputs.provider || 'copilot' }}
+          claude-model: >-
+            ${{ inputs['claude-model'] != '' && inputs['claude-model'] || 'claude-haiku-4-5' }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
 
   evaluate-quiz-answer:
     # Triggered when anyone posts a comment containing /quiz-answers on a PR
