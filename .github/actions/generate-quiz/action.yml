@@ -42,6 +42,17 @@ inputs:
   run-url:
     description: URL for the workflow run that generated the quiz.
     required: false
+  provider:
+    description: Quiz generation provider, "copilot" (GitHub Models) or "claude" (Anthropic API).
+    required: false
+    default: copilot
+  anthropic-api-key:
+    description: Anthropic API key. Required when provider is "claude".
+    required: false
+  claude-model:
+    description: Claude model identifier, used when provider is "claude".
+    required: false
+    default: claude-haiku-4-5
 
 runs:
   using: composite
@@ -61,8 +72,14 @@ runs:
         MAX_FILES: ${{ inputs.max-files }}
         MIN_CORRECT: ${{ inputs.pass-threshold }}
         RUN_URL: ${{ inputs.run-url }}
+<<<<<<< HEAD
         AI_ENDPOINT: ${{ inputs.ai-endpoint }}
         AI_API_KEY: ${{ inputs.ai-api-key }}
         AI_AUTH_STYLE: ${{ inputs.ai-auth-style }}
         AI_JSON_MODE: ${{ inputs.ai-json-mode }}
+=======
+        QUIZ_PROVIDER: ${{ inputs.provider }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_MODEL: ${{ inputs.claude-model }}
+>>>>>>> origin/main
       run: node "$GITHUB_ACTION_PATH/../../scripts/pr-quiz.mjs"
