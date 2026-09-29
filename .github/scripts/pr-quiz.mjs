@@ -41,7 +41,8 @@ function resolveEndpoint(endpoint) {
 }
 
 const modelsEndpoint = resolveEndpoint(rawEndpoint);
-const modelHost = new URL(modelsEndpoint).host;
+const generationModel = provider === 'claude' ? claudeModel : model;
+const modelHost = new URL(provider === 'claude' ? anthropicEndpoint : modelsEndpoint).host;
 
 if (!['bearer', 'api-key'].includes(aiAuthStyle)) throw new Error('AI_AUTH_STYLE must be "bearer" or "api-key"');
 if (!['auto', 'on', 'off'].includes(aiJsonMode)) throw new Error('AI_JSON_MODE must be "auto", "on" or "off"');
@@ -394,7 +395,6 @@ async function loadPullRequestContext() {
   };
 }
 
-<<<<<<< HEAD
 async function postChatCompletion(body) {
   return fetch(modelsEndpoint, {
     method: 'POST',
@@ -403,10 +403,7 @@ async function postChatCompletion(body) {
   });
 }
 
-async function requestQuestionsOnce(prompt) {
-=======
 async function requestQuestionsFromCopilot(prompt) {
->>>>>>> origin/main
   const body = {
     model,
     messages: [
@@ -538,7 +535,7 @@ async function generateQuestions(prompt) {
 
 (async () => {
   const { pr, prompt } = await loadPullRequestContext();
-  console.log(`Using model "${model}" at ${modelHost}${useCustomProvider ? ' (custom provider)' : ' (GitHub Models)'}.`);
+  console.log(`Using model "${generationModel}" at ${modelHost}${provider === 'claude' ? ' (Claude)' : useCustomProvider ? ' (custom provider)' : ' (GitHub Models)'}.`);
 
   let questions;
   let usedFallback = false;
