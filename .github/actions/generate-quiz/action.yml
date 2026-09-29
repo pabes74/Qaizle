@@ -12,9 +12,25 @@ inputs:
     description: Pull request number.
     required: true
   model:
-    description: GitHub Models/Copilot model identifier.
+    description: GitHub Models id, or the model name at your own provider when ai-endpoint is set.
     required: false
     default: openai/gpt-4.1-mini
+  ai-endpoint:
+    description: OpenAI-compatible base URL or full /chat/completions URL. Empty uses GitHub Models.
+    required: false
+    default: ""
+  ai-api-key:
+    description: API key for ai-endpoint. Pass it from a secret. Empty uses the GitHub token with GitHub Models.
+    required: false
+    default: ""
+  ai-auth-style:
+    description: How the API key is sent, either "bearer" (Authorization header) or "api-key" (api-key header, Azure OpenAI).
+    required: false
+    default: bearer
+  ai-json-mode:
+    description: Send response_format json_object, either "auto", "on" or "off".
+    required: false
+    default: auto
   max-files:
     description: Maximum changed files to include in analysis.
     required: false
@@ -45,4 +61,8 @@ runs:
         MAX_FILES: ${{ inputs.max-files }}
         MIN_CORRECT: ${{ inputs.pass-threshold }}
         RUN_URL: ${{ inputs.run-url }}
+        AI_ENDPOINT: ${{ inputs.ai-endpoint }}
+        AI_API_KEY: ${{ inputs.ai-api-key }}
+        AI_AUTH_STYLE: ${{ inputs.ai-auth-style }}
+        AI_JSON_MODE: ${{ inputs.ai-json-mode }}
       run: node "$GITHUB_ACTION_PATH/../../scripts/pr-quiz.mjs"

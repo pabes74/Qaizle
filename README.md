@@ -30,7 +30,7 @@ To make this a hard gate, go to your repository's **Settings → Branches → Br
 
 ## Prerequisites
 
-- A GitHub plan/account with access to **Copilot / GitHub Models**.
+- A GitHub plan/account with access to **Copilot / GitHub Models**, _or_ your own OpenAI-compatible AI provider (see [Use your own AI provider](#use-your-own-ai-provider)).
 - Workflow permissions for:
   - `pull-requests: write`
   - `issues: write`
@@ -59,6 +59,58 @@ The workflow runs automatically on `pull_request` events and answer evaluation r
 | `model` | `openai/gpt-4.1-mini` | GitHub Models / Copilot model identifier |
 | `max-files` | `30` | Maximum changed files to include in analysis |
 | `pass-threshold` | `3` | Minimum correct answers to pass (0 = no gate) |
+| `ai-endpoint` | _(empty = GitHub Models)_ | OpenAI-compatible base URL or full `/chat/completions` URL |
+| `ai-auth-style` | `bearer` | `bearer` (`Authorization: Bearer <key>`) or `api-key` (`api-key: <key>` header, Azure OpenAI) |
+| `ai-json-mode` | `auto` | Send `response_format: json_object`: `auto` (on for custom providers, retried without it if rejected), `on`, `off` |
+
+| Secret | Description |
+|--------|-------------|
+| `ai-api-key` | API key for `ai-endpoint`. When omitted, the workflow's `GITHUB_TOKEN` is used against GitHub Models. |
+
+## Use your own AI provider
+
+By default Qaizle uses GitHub Models. To use your own AI, pass an endpoint, a model name and an API key (always from a repository or organization secret). Any provider with an **OpenAI-compatible `/chat/completions` API** works.
+
+```yaml
+jobs:
+  qaizle-quiz:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    uses: pabes74/Qaizle/.github/workflows/copilot-pr-quiz.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      repository: ${{ github.repository }}
+      ai-endpoint: https://api.openai.com/v1
+      model: gpt-4.1-mini
+    secrets:
+      ai-api-key: ${{ secrets.QAIZLE_AI_API_KEY }}
+```
+
+Or use the composite action directly:
+
+```yaml
+    steps:
+      - uses: pabes74/Qaizle/.github/actions/generate-quiz@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          pr-number: ${{ github.event.pull_request.number }}
+          ai-endpoint: https://api.anthropic.com/v1/
+          ai-api-key: ${{ secrets.QAIZLE_AI_API_KEY }}
+          model: claude-sonnet-5
+```
+
+| Provider | `ai-endpoint` | `ai-auth-style` | `model` example |
+|----------|---------------|-----------------|-----------------|
+| OpenAI | `https://api.openai.com/v1` | `bearer` | `gpt-4.1-mini` |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>/chat/completions?api-version=<version>` | `api-key` | `<deployment>` |
+| Anthropic (OpenAI-compatible endpoint) | `https://api.anthropic.com/v1/` | `bearer` | `claude-sonnet-5` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `bearer` | `<vendor>/<model>` |
+| LiteLLM proxy | `https://<your-proxy>/v1` | `bearer` | your configured model name |
+| Ollama / vLLM (self-hosted runner) | `http://localhost:11434/v1` | `bearer` (key optional) | `llama3.1` |
+
+The `/chat/completions` suffix is added automatically when you pass a base URL. The comment footer shows which host generated the quiz. If the provider fails or returns invalid JSON, Qaizle retries once and then falls back to template questions, so the check is never blocked by an AI outage.
+
+> **What about decision models such as Jev (typesafe.ai)?** Jev returns typed decisions (choice / score / probability) rather than free text and has no OpenAI-compatible API, so it cannot write quiz questions, options and rationales. It could be a good fit later as a *validator* that double-checks the generated answer key, but it is not supported as a quiz generator.
 
 ## Portability
 

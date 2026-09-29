@@ -31,6 +31,25 @@ on:
         required: false
         type: number
         default: 3
+      ai-endpoint:
+        description: OpenAI-compatible base URL or /chat/completions URL of your own AI provider (empty = GitHub Models)
+        required: false
+        type: string
+        default: ""
+      ai-auth-style:
+        description: How the API key is sent, either "bearer" or "api-key" (Azure OpenAI)
+        required: false
+        type: string
+        default: bearer
+      ai-json-mode:
+        description: Send response_format json_object, either "auto", "on" or "off"
+        required: false
+        type: string
+        default: auto
+    secrets:
+      ai-api-key:
+        description: API key for ai-endpoint
+        required: false
 
 permissions:
   contents: read
@@ -62,6 +81,12 @@ jobs:
             ${{ inputs['pass-threshold'] != '' && inputs['pass-threshold'] || 3 }}
           run-url: >-
             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ai-endpoint: ${{ inputs['ai-endpoint'] }}
+          ai-api-key: ${{ secrets['ai-api-key'] }}
+          ai-auth-style: >-
+            ${{ inputs['ai-auth-style'] != '' && inputs['ai-auth-style'] || 'bearer' }}
+          ai-json-mode: >-
+            ${{ inputs['ai-json-mode'] != '' && inputs['ai-json-mode'] || 'auto' }}
 
   evaluate-quiz-answer:
     # Triggered when anyone posts a comment containing /quiz-answers on a PR
