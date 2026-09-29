@@ -22,7 +22,50 @@ if (!Number.isFinite(prNumber)) throw new Error('PR_NUMBER must be a valid pull 
 
 const [owner, repo] = targetRepository.split('/');
 const githubApiBase = 'https://api.github.com';
-const modelsEndpoint = process.env.MODELS_ENDPOINT || 'https://models.github.ai/inference/chat/completions';
+const githubModelsEndpoint = 'https://models.github.ai/inference/chat/completions';
+
+// Bring-your-own-AI: any OpenAI-compatible /chat/completions provider. Without an API key, GitHub Models is used.
+const aiApiKey = (process.env.AI_API_KEY || '').trim();
+const aiAuthStyle = (process.env.AI_AUTH_STYLE || 'bearer').trim().toLowerCase();
+const aiJsonMode = (process.env.AI_JSON_MODE || 'auto').trim().toLowerCase();
+const rawEndpoint = (process.env.AI_ENDPOINT || process.env.MODELS_ENDPOINT || '').trim();
+const useCustomProvider = Boolean(aiApiKey || rawEndpoint);
+
+function resolveEndpoint(endpoint) {
+  if (!endpoint) return githubModelsEndpoint;
+  const url = new URL(endpoint);
+  if (!/\/chat\/completions\/?$/.test(url.pathname)) {
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/chat/completions`;
+  }
+  return url.toString();
+}
+
+const modelsEndpoint = resolveEndpoint(rawEndpoint);
+const generationModel = provider === 'claude' ? claudeModel : model;
+const modelHost = new URL(provider === 'claude' ? anthropicEndpoint : modelsEndpoint).host;
+
+if (!['bearer', 'api-key'].includes(aiAuthStyle)) throw new Error('AI_AUTH_STYLE must be "bearer" or "api-key"');
+if (!['auto', 'on', 'off'].includes(aiJsonMode)) throw new Error('AI_JSON_MODE must be "auto", "on" or "off"');
+
+function modelHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!useCustomProvider) {
+    headers.Authorization = `token ${token}`;
+    headers['api-key'] = token;
+  } else if (aiApiKey) {
+    if (aiAuthStyle === 'api-key') headers['api-key'] = aiApiKey;
+    else headers.Authorization = `Bearer ${aiApiKey}`;
+  }
+  return headers;
+}
+
+function wantsJsonMode() {
+  if (aiJsonMode === 'on') return true;
+  if (aiJsonMode === 'off') return false;
+  // GitHub Models proxies OpenAI-compatible models; only these reliably support response_format.
+  return useCustomProvider || model.startsWith('openai/');
+}
+
 const marker = '<!-- copilot-pr-quiz -->';
 
 // Base prompt: keep quiz questions focused on the PR's overall goal(s), not per-file implementation details.
@@ -253,7 +296,7 @@ function renderComment(questions, usedFallback = false) {
   lines.push('> and the PR check will be updated accordingly.');
   lines.push('');
   lines.push('---');
-  lines.push(`_Generated automatically by the Copilot PR Quiz workflow${runUrl ? ` ([run logs](${runUrl}))` : ''}._`);
+  lines.push(`_Generated automatically by the Copilot PR Quiz workflow via \`${modelHost}\`${runUrl ? ` ([run logs](${runUrl}))` : ''}._`);
 
   return lines.join('\n');
 }
@@ -352,6 +395,14 @@ async function loadPullRequestContext() {
   };
 }
 
+async function postChatCompletion(body) {
+  return fetch(modelsEndpoint, {
+    method: 'POST',
+    headers: modelHeaders(),
+    body: JSON.stringify(body)
+  });
+}
+
 async function requestQuestionsFromCopilot(prompt) {
   const body = {
     model,
@@ -368,20 +419,19 @@ async function requestQuestionsFromCopilot(prompt) {
     temperature: 0.2
   };
 
-  // GitHub Models proxies OpenAI-compatible models; only these reliably support response_format.
-  if (model.startsWith('openai/')) {
+  const jsonMode = wantsJsonMode();
+  if (jsonMode) {
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch(modelsEndpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `token ${token}`,
-      'api-key': token,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
+  let response = await postChatCompletion(body);
+
+  // Some OpenAI-compatible providers reject response_format; in auto mode retry without it.
+  if (jsonMode && aiJsonMode === 'auto' && useCustomProvider && [400, 422].includes(response.status)) {
+    console.warn(`Provider rejected JSON mode (${response.status}); retrying without response_format.`);
+    delete body.response_format;
+    response = await postChatCompletion(body);
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -485,6 +535,7 @@ async function generateQuestions(prompt) {
 
 (async () => {
   const { pr, prompt } = await loadPullRequestContext();
+  console.log(`Using model "${generationModel}" at ${modelHost}${provider === 'claude' ? ' (Claude)' : useCustomProvider ? ' (custom provider)' : ' (GitHub Models)'}.`);
 
   let questions;
   let usedFallback = false;
