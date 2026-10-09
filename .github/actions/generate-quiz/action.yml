@@ -3,7 +3,7 @@ description: Generates a PR reviewer quiz and creates its pending check run.
 
 inputs:
   github-token:
-    description: Token with the required pull-request, issue, model, and check permissions.
+    description: Token with the required pull-request, issue, and check permissions.
     required: true
   repository:
     description: Repository in owner/name format.
@@ -11,16 +11,20 @@ inputs:
   pr-number:
     description: Pull request number.
     required: true
-  model:
-    description: GitHub Models id, or the model name at your own provider when ai-endpoint is set.
+  copilot-token:
+    description: Fine-grained PAT with the "Copilot Requests" account permission, used by the Copilot CLI when provider is "copilot". Pass it from a secret.
     required: false
-    default: openai/gpt-4.1-mini
+    default: ""
+  model:
+    description: Copilot CLI model (empty = CLI default), or the model name at your own provider when ai-endpoint is set.
+    required: false
+    default: ""
   ai-endpoint:
-    description: OpenAI-compatible base URL or full /chat/completions URL. Empty uses GitHub Models.
+    description: OpenAI-compatible base URL or full /chat/completions URL. Empty uses the Copilot CLI.
     required: false
     default: ""
   ai-api-key:
-    description: API key for ai-endpoint. Pass it from a secret. Empty uses the GitHub token with GitHub Models.
+    description: API key for ai-endpoint. Pass it from a secret.
     required: false
     default: ""
   ai-auth-style:
@@ -43,7 +47,7 @@ inputs:
     description: URL for the workflow run that generated the quiz.
     required: false
   provider:
-    description: Quiz generation provider, "copilot" (GitHub Models) or "claude" (Anthropic API).
+    description: Quiz generation provider, "copilot" (Copilot CLI, or ai-endpoint when set) or "claude" (Anthropic API).
     required: false
     default: copilot
   anthropic-api-key:
@@ -62,6 +66,11 @@ runs:
       with:
         node-version: 20
 
+    - name: Install Copilot CLI
+      if: inputs.provider != 'claude' && inputs.ai-endpoint == ''
+      shell: bash
+      run: npm install -g @github/copilot
+
     - name: Generate reviewer quiz
       shell: bash
       env:
@@ -69,6 +78,7 @@ runs:
         TARGET_REPOSITORY: ${{ inputs.repository }}
         PR_NUMBER: ${{ inputs.pr-number }}
         QUIZ_MODEL: ${{ inputs.model }}
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-token }}
         MAX_FILES: ${{ inputs.max-files }}
         MIN_CORRECT: ${{ inputs.pass-threshold }}
         RUN_URL: ${{ inputs.run-url }}
