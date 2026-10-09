@@ -1,7 +1,13 @@
+import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 const token = process.env.GITHUB_TOKEN;
 const targetRepository = process.env.TARGET_REPOSITORY || process.env.GITHUB_REPOSITORY;
 const prNumber = Number.parseInt(process.env.PR_NUMBER || '', 10);
-const model = process.env.QUIZ_MODEL || 'openai/gpt-4.1-mini';
+// Empty model = the Copilot CLI's default model. Required when AI_ENDPOINT is set.
+const model = (process.env.QUIZ_MODEL || '').trim();
 const maxFiles = Number.parseInt(process.env.MAX_FILES || '30', 10);
 const runUrl = process.env.RUN_URL || '';
 const minCorrect = Math.max(0, Math.min(5, Number.parseInt(process.env.MIN_CORRECT || '3', 10)));
@@ -22,17 +28,23 @@ if (!Number.isFinite(prNumber)) throw new Error('PR_NUMBER must be a valid pull 
 
 const [owner, repo] = targetRepository.split('/');
 const githubApiBase = 'https://api.github.com';
-const githubModelsEndpoint = 'https://models.github.ai/inference/chat/completions';
+// GitHub Models (models.github.ai) was retired on 2026-07-30 and now answers every request with a plain "OK".
+// The "copilot" provider therefore runs the Copilot CLI, authenticated with a fine-grained PAT that has the
+// "Copilot Requests" permission (COPILOT_GITHUB_TOKEN).
+const copilotToken = (process.env.COPILOT_GITHUB_TOKEN || '').trim();
+const copilotCommand = process.env.COPILOT_CLI || 'copilot';
+const copilotTimeoutMs = 180000;
+// A single command-line argument is capped at 128 KiB on Linux.
+const copilotMaxPromptChars = 100000;
 
-// Bring-your-own-AI: any OpenAI-compatible /chat/completions provider. Without an API key, GitHub Models is used.
+// Bring-your-own-AI: any OpenAI-compatible /chat/completions provider, used instead of the Copilot CLI when AI_ENDPOINT is set.
 const aiApiKey = (process.env.AI_API_KEY || '').trim();
 const aiAuthStyle = (process.env.AI_AUTH_STYLE || 'bearer').trim().toLowerCase();
 const aiJsonMode = (process.env.AI_JSON_MODE || 'auto').trim().toLowerCase();
 const rawEndpoint = (process.env.AI_ENDPOINT || process.env.MODELS_ENDPOINT || '').trim();
-const useCustomProvider = Boolean(aiApiKey || rawEndpoint);
+const useCustomProvider = Boolean(rawEndpoint);
 
 function resolveEndpoint(endpoint) {
-  if (!endpoint) return githubModelsEndpoint;
   const url = new URL(endpoint);
   if (!/\/chat\/completions\/?$/.test(url.pathname)) {
     url.pathname = `${url.pathname.replace(/\/+$/, '')}/chat/completions`;
@@ -40,19 +52,20 @@ function resolveEndpoint(endpoint) {
   return url.toString();
 }
 
-const modelsEndpoint = resolveEndpoint(rawEndpoint);
-const generationModel = provider === 'claude' ? claudeModel : model;
-const modelHost = new URL(provider === 'claude' ? anthropicEndpoint : modelsEndpoint).host;
+const modelsEndpoint = useCustomProvider ? resolveEndpoint(rawEndpoint) : '';
+const generationModel = provider === 'claude' ? claudeModel : model || 'Copilot CLI default';
+const modelHost =
+  provider === 'claude' ? new URL(anthropicEndpoint).host : useCustomProvider ? new URL(modelsEndpoint).host : 'Copilot CLI';
+const backendLabel = provider === 'claude' ? 'Claude' : useCustomProvider ? 'custom provider' : 'Copilot CLI';
 
 if (!['bearer', 'api-key'].includes(aiAuthStyle)) throw new Error('AI_AUTH_STYLE must be "bearer" or "api-key"');
 if (!['auto', 'on', 'off'].includes(aiJsonMode)) throw new Error('AI_JSON_MODE must be "auto", "on" or "off"');
+if (provider === 'copilot' && useCustomProvider && !model) throw new Error('QUIZ_MODEL is required when AI_ENDPOINT is set');
+if (aiApiKey && !useCustomProvider) console.warn('AI_API_KEY is set without AI_ENDPOINT; ignoring it.');
 
 function modelHeaders() {
   const headers = { 'Content-Type': 'application/json' };
-  if (!useCustomProvider) {
-    headers.Authorization = `token ${token}`;
-    headers['api-key'] = token;
-  } else if (aiApiKey) {
+  if (aiApiKey) {
     if (aiAuthStyle === 'api-key') headers['api-key'] = aiApiKey;
     else headers.Authorization = `Bearer ${aiApiKey}`;
   }
@@ -60,10 +73,7 @@ function modelHeaders() {
 }
 
 function wantsJsonMode() {
-  if (aiJsonMode === 'on') return true;
-  if (aiJsonMode === 'off') return false;
-  // GitHub Models proxies OpenAI-compatible models; only these reliably support response_format.
-  return useCustomProvider || model.startsWith('openai/');
+  return aiJsonMode !== 'off';
 }
 
 const marker = '<!-- copilot-pr-quiz -->';
@@ -254,7 +264,7 @@ function renderComment(questions, usedFallback = false) {
 
   if (usedFallback) {
     lines.push(
-      '> ⚠️ **AI-generated quiz unavailable — showing generic fallback questions.** Check the workflow run logs and confirm the `models: read` permission is granted to this workflow.'
+      '> ⚠️ **AI-generated quiz unavailable — showing generic fallback questions.** Check the workflow run logs and confirm the `copilot-token` secret is a fine-grained PAT with the **Copilot Requests** permission.'
     );
     lines.push('');
   }
@@ -403,7 +413,67 @@ async function postChatCompletion(body) {
   });
 }
 
-async function requestQuestionsFromCopilot(prompt) {
+function runCopilotCli(prompt) {
+  if (!copilotToken) {
+    return Promise.reject(
+      new Error('Missing COPILOT_GITHUB_TOKEN: pass a fine-grained PAT with the "Copilot Requests" permission as the copilot-token secret')
+    );
+  }
+
+  const fullPrompt = `${QUIZ_SYSTEM_PROMPT}\n\n${prompt}\n\nRespond with the JSON object only. Do not use any tools.`.slice(
+    0,
+    copilotMaxPromptChars
+  );
+  const args = ['-p', fullPrompt, '--no-ask-user'];
+  if (model) args.push('--model', model);
+
+  // Run in an empty directory, without the workflow's GITHUB_TOKEN, and without --allow-tool flags,
+  // so the CLI can only answer the prompt.
+  const env = { ...process.env, COPILOT_GITHUB_TOKEN: copilotToken };
+  delete env.GITHUB_TOKEN;
+  delete env.GH_TOKEN;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(copilotCommand, args, {
+      cwd: mkdtempSync(join(tmpdir(), 'qaizle-')),
+      env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), copilotTimeoutMs);
+
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    child.stderr.on('data', (chunk) => (stderr += chunk));
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(
+        error.code === 'ENOENT'
+          ? new Error(`Copilot CLI "${copilotCommand}" not found; install it with "npm install -g @github/copilot"`)
+          : error
+      );
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve(stdout);
+      const reason = signal ? `killed by ${signal} after ${copilotTimeoutMs / 1000}s` : `exit code ${code}`;
+      reject(new Error(`Copilot CLI failed (${reason}): ${(stderr || stdout).trim().slice(0, 500)}`));
+    });
+  });
+}
+
+async function requestQuestionsFromCopilotCli(prompt) {
+  const output = await runCopilotCli(prompt);
+  const questions = normalizeQuestions(parseJsonPayload(output));
+
+  if (questions.length !== 5) {
+    throw new Error(`Expected 5 questions, received ${questions.length}`);
+  }
+
+  return questions;
+}
+
+async function requestQuestionsFromCustomProvider(prompt) {
   const body = {
     model,
     messages: [
@@ -427,7 +497,7 @@ async function requestQuestionsFromCopilot(prompt) {
   let response = await postChatCompletion(body);
 
   // Some OpenAI-compatible providers reject response_format; in auto mode retry without it.
-  if (jsonMode && aiJsonMode === 'auto' && useCustomProvider && [400, 422].includes(response.status)) {
+  if (jsonMode && aiJsonMode === 'auto' && [400, 422].includes(response.status)) {
     console.warn(`Provider rejected JSON mode (${response.status}); retrying without response_format.`);
     delete body.response_format;
     response = await postChatCompletion(body);
@@ -438,7 +508,13 @@ async function requestQuestionsFromCopilot(prompt) {
     throw new Error(`Model request failed (${response.status}): ${text}`);
   }
 
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Provider returned a non-JSON response (${response.status}): ${text.trim().slice(0, 200)}`);
+  }
   const content = data?.choices?.[0]?.message?.content;
   const parsed = parseJsonPayload(content);
   const questions = normalizeQuestions(parsed);
@@ -520,7 +596,8 @@ async function requestQuestionsFromClaude(prompt) {
 }
 
 function requestQuestionsOnce(prompt) {
-  return provider === 'claude' ? requestQuestionsFromClaude(prompt) : requestQuestionsFromCopilot(prompt);
+  if (provider === 'claude') return requestQuestionsFromClaude(prompt);
+  return useCustomProvider ? requestQuestionsFromCustomProvider(prompt) : requestQuestionsFromCopilotCli(prompt);
 }
 
 async function generateQuestions(prompt) {
@@ -535,7 +612,7 @@ async function generateQuestions(prompt) {
 
 (async () => {
   const { pr, prompt } = await loadPullRequestContext();
-  console.log(`Using model "${generationModel}" at ${modelHost}${provider === 'claude' ? ' (Claude)' : useCustomProvider ? ' (custom provider)' : ' (GitHub Models)'}.`);
+  console.log(`Using model "${generationModel}" via ${modelHost} (${backendLabel}).`);
 
   let questions;
   let usedFallback = false;

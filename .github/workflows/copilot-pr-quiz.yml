@@ -17,10 +17,10 @@ on:
         type: string
         default: ""
       model:
-        description: GitHub Models/Copilot model identifier
+        description: Copilot CLI model (empty = CLI default), or the model name for ai-endpoint
         required: false
         type: string
-        default: openai/gpt-4.1-mini
+        default: ""
       max-files:
         description: Maximum changed files to include in analysis
         required: false
@@ -32,7 +32,7 @@ on:
         type: number
         default: 3
       ai-endpoint:
-        description: OpenAI-compatible base URL or /chat/completions URL of your own AI provider (empty = GitHub Models)
+        description: OpenAI-compatible base URL or /chat/completions URL of your own AI provider (empty = Copilot CLI)
         required: false
         type: string
         default: ""
@@ -47,7 +47,7 @@ on:
         type: string
         default: auto
       provider:
-        description: Quiz generation provider, "copilot" (GitHub Models) or "claude" (Anthropic API)
+        description: Quiz generation provider, "copilot" (Copilot CLI, or ai-endpoint when set) or "claude" (Anthropic API)
         required: false
         type: string
         default: copilot
@@ -57,6 +57,9 @@ on:
         type: string
         default: claude-haiku-4-5
     secrets:
+      copilot-token:
+        description: Fine-grained PAT with the "Copilot Requests" account permission, used by the Copilot CLI
+        required: false
       ai-api-key:
         description: API key for ai-endpoint
         required: false
@@ -68,7 +71,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  models: read
   checks: write
 
 jobs:
@@ -86,8 +88,9 @@ jobs:
             ${{ inputs.repository != '' && inputs.repository || github.repository }}
           pr-number: >-
             ${{ inputs['pr-number'] != '' && inputs['pr-number'] || github.event.pull_request.number }}
-          model: >-
-            ${{ inputs.model != '' && inputs.model || 'openai/gpt-4.1-mini' }}
+          model: ${{ inputs.model }}
+          copilot-token: >-
+            ${{ secrets['copilot-token'] != '' && secrets['copilot-token'] || secrets.COPILOT_GITHUB_TOKEN }}
           max-files: >-
             ${{ inputs['max-files'] != '' && inputs['max-files'] || 30 }}
           pass-threshold: >-
